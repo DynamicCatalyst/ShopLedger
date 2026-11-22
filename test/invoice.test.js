@@ -132,7 +132,7 @@ test('Invoice preserves recorded discount after coupon is deactivated', () => {
     tax: 99.5,
     total: 2089.5,
     items: [
-      { name: 'Groundnut oil', sku: 'OIL-002', hsn: '1508', price: 1120, qty: 2 }
+      { name: 'Groundnut oil', sku: 'OIL-002', hsn: '1508', gstRate: 0.05, price: 1120, qty: 2 }
     ]
   };
   const currentCheckout = pricing.computeTotals(order.items, order.coupon);
@@ -174,7 +174,34 @@ test('Invoice line GST amounts reconcile to recorded tax when the current slab c
   try {
     config.tax.hsnSlabs['1508'] = 18;
     const figures = invoice.computeInvoiceFigures(order);
+    assert.equal(figures.rows[0].gstPercent, null);
     assert.equal(figures.rows.reduce((sum, row) => sum + row.lineTax, 0), order.tax);
+    assert.equal(figures.tax, order.tax);
+    assert.equal(figures.total, order.total);
+    assert.ok(invoice.render(order).includes('<td class="r">Not recorded</td>'));
+  } finally {
+    config.tax.hsnSlabs['1508'] = originalSlab;
+  }
+});
+
+test('Invoice preserves checkout-time GST rate after HSN slab changes', () => {
+  const order = {
+    id: 1004,
+    coupon: 'SAVE10',
+    subtotal: 2240,
+    discount: 150,
+    tax: 104.5,
+    total: 2194.5,
+    items: [
+      { name: 'Groundnut oil', sku: 'OIL-002', hsn: '1508', gstRate: 0.05, price: 1120, qty: 2 }
+    ]
+  };
+  const originalSlab = config.tax.hsnSlabs['1508'];
+  try {
+    config.tax.hsnSlabs['1508'] = 18;
+    const figures = invoice.computeInvoiceFigures(order);
+    assert.equal(figures.rows[0].gstPercent, 5);
+    assert.equal(figures.rows[0].lineTax, 104.5);
     assert.equal(figures.tax, order.tax);
     assert.equal(figures.total, order.total);
   } finally {
