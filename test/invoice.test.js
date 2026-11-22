@@ -4,9 +4,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const invoice = require('../lib/invoice');
 const pricing = require('../lib/pricing');
+const config = require('../config');
 
-// These fixtures use only in-memory order/item values. Keep both hsn (checkout's
-// tax lookup) and gstRate (invoice's tax lookup) on every line.
+// These fixtures use only in-memory order/item values and exercise HSN-based GST.
 const cases = [
   {
     id: 1001,
@@ -77,3 +77,107 @@ for (const orderCase of cases) {
     }, orderCase.expectedCheckout);
   });
 }
+
+test('Invoice uses the HSN slab and billed totals when stored lines omit gstRate', () => {
+  const order = {
+    id: 1004,
+    coupon: 'SAVE10',
+    total: 2194.5,
+    items: [
+      { name: 'Groundnut oil', sku: 'OIL-002', hsn: '1508', price: 1120, qty: 2 }
+    ]
+  };
+  const checkout = pricing.computeTotals(order.items, order.coupon);
+  const figures = invoice.computeInvoiceFigures(order);
+
+  assert.deepEqual({
+    subtotal: checkout.subtotal,
+    discount: checkout.discount,
+    tax: checkout.tax,
+    cgst: checkout.cgst,
+    sgst: checkout.sgst,
+    total: checkout.total
+  }, {
+    subtotal: 2240,
+    discount: 150,
+    tax: 104.5,
+    cgst: 52.25,
+    sgst: 52.25,
+    total: order.total
+  });
+  assert.equal(figures.rows[0].gstPercent, 5);
+  assert.deepEqual({
+    subtotal: figures.subtotal,
+    discount: figures.discount,
+    tax: figures.tax,
+    cgst: figures.cgst,
+    sgst: figures.sgst,
+    total: figures.total
+  }, {
+    subtotal: checkout.subtotal,
+    discount: checkout.discount,
+    tax: checkout.tax,
+    cgst: checkout.cgst,
+    sgst: checkout.sgst,
+    total: checkout.total
+  });
+});
+
+test('Invoice preserves recorded discount after coupon is deactivated', () => {
+  const order = {
+    id: 1010,
+    coupon: 'DIWALI20',
+    subtotal: 2240,
+    discount: 250,
+    tax: 99.5,
+    total: 2089.5,
+    items: [
+      { name: 'Groundnut oil', sku: 'OIL-002', hsn: '1508', price: 1120, qty: 2 }
+    ]
+  };
+  const currentCheckout = pricing.computeTotals(order.items, order.coupon);
+  const figures = invoice.computeInvoiceFigures(order);
+
+  assert.equal(currentCheckout.discount, 0);
+  assert.equal(figures.rows[0].gstPercent, 5);
+  assert.equal(figures.rows[0].lineTax, 99.5);
+  assert.deepEqual({
+    subtotal: figures.subtotal,
+    discount: figures.discount,
+    tax: figures.tax,
+    cgst: figures.cgst,
+    sgst: figures.sgst,
+    total: figures.total
+  }, {
+    subtotal: order.subtotal,
+    discount: order.discount,
+    tax: order.tax,
+    cgst: 49.75,
+    sgst: 49.75,
+    total: order.total
+  });
+});
+
+test('Invoice line GST amounts reconcile to recorded tax when the current slab changes', () => {
+  const order = {
+    id: 1004,
+    coupon: 'SAVE10',
+    subtotal: 2240,
+    discount: 150,
+    tax: 104.5,
+    total: 2194.5,
+    items: [
+      { name: 'Groundnut oil', sku: 'OIL-002', hsn: '1508', price: 1120, qty: 2 }
+    ]
+  };
+  const originalSlab = config.tax.hsnSlabs['1508'];
+  try {
+    config.tax.hsnSlabs['1508'] = 18;
+    const figures = invoice.computeInvoiceFigures(order);
+    assert.equal(figures.rows.reduce((sum, row) => sum + row.lineTax, 0), order.tax);
+    assert.equal(figures.tax, order.tax);
+    assert.equal(figures.total, order.total);
+  } finally {
+    config.tax.hsnSlabs['1508'] = originalSlab;
+  }
+});
